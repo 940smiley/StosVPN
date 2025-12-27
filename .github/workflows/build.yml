@@ -17,18 +17,42 @@ jobs:
               run: brew install ldid
 
             - name: Select Xcode version
-              run: sudo xcode-select -s /Applications/Xcode_16.2.app
+              run: |
+                  # Find available Xcode versions
+                  ls -la /Applications/ | grep -i xcode
+                  # Use the most recent Xcode version available
+                  sudo xcode-select -s /Applications/Xcode.app
+
+            - name: Accept Xcode license
+              run: |
+                  sudo xcodebuild -license accept
 
             - name: Build Xcode Archive
               run: |
+                  # Clean build directory first
+                  rm -rf build/
+                  mkdir -p build
+
+                  # Build the archive
                   xcodebuild archive \
-                    -project StosVPN.xcodeproj \
+                    -workspace StosVPN.xcodeproj/project.xcworkspace \
                     -scheme StosVPN \
                     -destination 'generic/platform=iOS' \
                     -archivePath build/StosVPN.xcarchive \
                     CODE_SIGN_IDENTITY="" \
                     CODE_SIGNING_REQUIRED=NO \
-                    CODE_SIGNING_ALLOWED=NO
+                    CODE_SIGNING_ALLOWED=NO \
+                    SKIP_INSTALL=NO \
+                    GCC_PREPROCESSOR_DEFINITIONS='$(GCC_PREPROCESSOR_DEFINITIONS) BUILD_ID="$(date +%s)"'
+
+            - name: Verify Archive
+              run: |
+                  if [ ! -d "build/StosVPN.xcarchive" ]; then
+                    echo "Error: Archive was not created successfully"
+                    exit 1
+                  fi
+                  echo "Archive created successfully at build/StosVPN.xcarchive"
+                  ls -la build/StosVPN.xcarchive/
 
             - name: Create Payload directory
               run: mkdir -p Payload
@@ -38,19 +62,24 @@ jobs:
 
             - name: Find and Sign App Extension
               run: |
-                  APPEX_PATH=$(find Payload/StosVPN.app/PlugIns -name "*.appex" | head -n 1)
-                  if [ -z "$APPEX_PATH" ]; then
-                    echo "Error: App Extension (.appex) not found in PlugIns directory."
+                  # The extension should be in the PlugIns directory inside the app
+                  EXTENSION_PATH="Payload/StosVPN.app/PlugIns/TunnelProv.appex"
+                  if [ ! -d "$EXTENSION_PATH" ]; then
+                    echo "Error: App Extension (TunnelProv.appex) not found in expected location: $EXTENSION_PATH"
+                    # List contents to debug
+                    echo "Contents of Payload/StosVPN.app:"
+                    ls -la Payload/StosVPN.app/
+                    ls -la Payload/StosVPN.app/PlugIns/ 2>/dev/null || echo "PlugIns directory not found"
                     exit 1
                   fi
-                  echo "Found App Extension at: $APPEX_PATH"
+                  echo "Found App Extension at: $EXTENSION_PATH"
                   # Use the specific entitlements for the extension
-                  ldid -S"${GITHUB_WORKSPACE}/TunnelProv/TunnelProv.entitlements" "$APPEX_PATH/$(basename "$APPEX_PATH" .appex)"
+                  ldid -S"${GITHUB_WORKSPACE}/TunnelProv/TunnelProv.entitlements" "$EXTENSION_PATH"
                   echo "Signed App Extension."
 
             - name: Sign Main App Bundle
               run: |
-                  APP_BINARY_PATH="Payload/StosVPN.app/StosVPN"
+                  APP_BINARY_PATH="Payload/StosVPN.app"
                   # Use the specific entitlements for the main app
                   ldid -S"${GITHUB_WORKSPACE}/StosVPN/StosVPN.entitlements" "$APP_BINARY_PATH"
                   echo "Signed Main App Bundle."
@@ -62,5 +91,5 @@ jobs:
             - name: Upload IPA Artifact
               uses: actions/upload-artifact@v4
               with:
-                  name: StosVPN-IPA.ipa
+                  name: StosVPN-fakesigned.ipa
                   path: StosVPN-fakesigned.ipa
